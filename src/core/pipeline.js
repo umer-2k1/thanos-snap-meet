@@ -34,6 +34,10 @@
 
     /* ---------------------------------------------------------------- VIDEO */
     async _wrapVideoTrack(rawTrack) {
+      // Meet calls getUserMedia more than once (device preview, then join).
+      // Tear down any previous render loop so we don't leak rAF callbacks.
+      if (this.video && this.video.raf) cancelAnimationFrame(this.video.raf);
+
       const videoEl = document.createElement("video");
       videoEl.muted = true;
       videoEl.playsInline = true;
@@ -178,8 +182,12 @@
         for (const track of real.getTracks()) {
           if (track.kind === "video" && constraints && constraints.video) {
             outTracks.push(await this._wrapVideoTrack(track));
-          } else if (track.kind === "audio" && constraints && constraints.audio && !this.audio) {
-            outTracks.push(this._wrapAudioTrack(track));
+          } else if (track.kind === "audio" && constraints && constraints.audio) {
+            // Always hand Meet the single gated track so muting is honoured no
+            // matter how many times it re-requests the mic. A later real track
+            // is redundant, so release it.
+            if (this.audio) { try { track.stop(); } catch (_) {} outTracks.push(this.audio.destTrack); }
+            else outTracks.push(this._wrapAudioTrack(track));
           } else {
             outTracks.push(track);
           }

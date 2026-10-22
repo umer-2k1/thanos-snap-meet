@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Thanos Snap — dust engine demo</title>
+  <style>
+    body{margin:0;background:#0d0d12;color:#ececf1;font:14px system-ui,sans-serif;
+      display:flex;flex-direction:column;align-items:center;gap:14px;padding:22px;}
+    h1{font-size:17px;margin:0;font-weight:700}
+    h1 span{color:#c084fc}
+    canvas{border-radius:14px;box-shadow:0 10px 40px rgba(0,0,0,.5);background:#000}
+    .row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+    button{font:600 13px system-ui;color:#fff;border:0;border-radius:999px;
+      padding:9px 18px;cursor:pointer;background:#6d28d9}
+    button.ghost{background:#2a2a32}
+    .hint{color:#8a8a98;font-size:12px;max-width:520px;text-align:center}
+    #state{font-weight:700;color:#a855f7}
+  </style>
+</head>
+<body>
+  <h1>✨ <span>Thanos Snap</span> — dust engine demo</h1>
+  <canvas id="out" width="480" height="360"></canvas>
+  <div class="row">
+    <button id="snap">Snap → disintegrate</button>
+    <button id="return" class="ghost">Snap again → return</button>
+    <button id="cam" class="ghost">Use my webcam</button>
+  </div>
+  <div class="hint">
+    State: <span id="state">live</span> — this drives the real
+    <code>src/effects/dust.js</code> engine used by the extension. Use a webcam, or
+    the built-in synthetic scene.
+  </div>
+
+  <script src="../src/core/config.js"></script>
+  <script src="../src/effects/dust.js"></script>
+  <script>
+    const TS = window.__THANOS_SNAP;
+    const out = document.getElementById("out");
+    const octx = out.getContext("2d");
+    const W = out.width, H = out.height;
+    const dust = new TS.DustEngine();
+    let state = "live";
+    const stateEl = document.getElementById("state");
+    const setState = s => { state = s; stateEl.textContent = s; };
+
+    // --- synthetic source scene (a simple "person" in a room) ---
+    const src = document.createElement("canvas");
+    src.width = W; src.height = H;
+    const sctx = src.getContext("2d");
+    let videoEl = null;
+
+    function drawScene(t){
+      // room background
+      const g = sctx.createLinearGradient(0,0,0,H);
+      g.addColorStop(0,"#2d3a4f"); g.addColorStop(1,"#1a222e");
+      sctx.fillStyle = g; sctx.fillRect(0,0,W,H);
+      sctx.fillStyle = "rgba(255,255,255,.05)";
+      for(let i=0;i<6;i++) sctx.fillRect(40+i*70, 30, 46, H-60); // "wall panels"
+      // person
+      const cx = W*0.5, bob = Math.sin(t/600)*4;
+      sctx.fillStyle = "#e8b48f"; // head
+      sctx.beginPath(); sctx.arc(cx, H*0.34+bob, 44, 0, 7); sctx.fill();
+      sctx.fillStyle = "#7c3aed"; // shirt
+      sctx.beginPath();
+      sctx.moveTo(cx-90,H); sctx.quadraticCurveTo(cx-80,H*0.5+bob,cx,H*0.5+bob);
+      sctx.quadraticCurveTo(cx+80,H*0.5+bob,cx+90,H); sctx.fill();
+    }
+
+    document.getElementById("snap").onclick = () => {
+      if (state!=="live") return;
+      setState("vanishing");
+      dust.vanish(src, W, H);
+    };
+    document.getElementById("return").onclick = () => {
+      if (state!=="gone") return;
+      setState("returning");
+      dust.rematerialise(src, W, H);
+    };
+    document.getElementById("cam").onclick = async () => {
+      try {
+        const s = await navigator.mediaDevices.getUserMedia({video:true});
+        videoEl = document.createElement("video");
+        videoEl.srcObject = s; videoEl.muted = true; await videoEl.play();
+      } catch(e){ alert("Webcam unavailable: "+e.message); }
+    };
+
+    function loop(){
+      requestAnimationFrame(loop);
+      const now = performance.now();
+      if (videoEl && videoEl.videoWidth) sctx.drawImage(videoEl,0,0,W,H);
+      else drawScene(now);
+
+      if (state==="vanishing" || state==="returning"){
+        const going = dust.render(octx, now);
+        if (!going) setState(state==="vanishing" ? "gone" : "live");
+      } else if (state==="gone"){
+        dust.drawGhost(octx, W, H);
+      } else {
+        octx.drawImage(src,0,0,W,H);
+      }
+    }
+    loop();
+  </script>
+</body>
+</html>

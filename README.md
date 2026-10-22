@@ -37,6 +37,17 @@ snap even while Meet is receiving pure silence. Muting is done by ramping the
 gain to zero (instant, click-free); as a cosmetic touch the extension also tries
 to toggle Meet's own on-screen mic button so its UI matches.
 
+## Try the effect instantly (no Meet needed)
+
+Want to see the disintegration before installing? Open a terminal in the repo and run:
+
+```bash
+python3 -m http.server 8731
+```
+
+Then visit <http://localhost:8731/demo/index.html> and hit **Snap** — it drives the
+exact `src/effects/dust.js` engine the extension uses, on a synthetic scene or your webcam.
+
 ## Install (unpacked)
 
 1. `git clone https://github.com/umer-2k1/thanos-snap-meet.git`
