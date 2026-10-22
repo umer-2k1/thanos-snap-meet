@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Thanos Snap — person-only segmentation test</title>
+  <style>
+    body{margin:0;background:#0d0d12;color:#ececf1;font:14px system-ui,sans-serif;
+      display:flex;flex-direction:column;align-items:center;gap:12px;padding:18px;}
+    h1{font-size:16px;margin:0}h1 span{color:#c084fc}
+    .stage{display:flex;gap:14px;flex-wrap:wrap;justify-content:center}
+    figure{margin:0;display:flex;flex-direction:column;align-items:center;gap:6px}
+    figcaption{font-size:12px;color:#9a9aa8}
+    canvas{border-radius:12px;background:#000;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+    .row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+    button{font:600 13px system-ui;color:#fff;border:0;border-radius:999px;padding:9px 16px;cursor:pointer;background:#6d28d9}
+    button.ghost{background:#2a2a32}
+    #status{font-size:12px;color:#8a8a98}#state{color:#a855f7;font-weight:700}
+  </style>
+</head>
+<body>
+  <h1>✨ <span>Thanos Snap</span> — person-only segmentation test</h1>
+  <div id="status">loading model… <span id="state"></span></div>
+  <div class="stage">
+    <figure><canvas id="out" width="360" height="640"></canvas><figcaption>output (what Meet sees)</figcaption></figure>
+    <figure><canvas id="mask" width="180" height="320"></canvas><figcaption>person mask</figcaption></figure>
+  </div>
+  <div class="row">
+    <button id="snap">Snap → disintegrate (you only)</button>
+    <button id="return" class="ghost">Snap again → return</button>
+    <button id="cam" class="ghost">Use my webcam</button>
+  </div>
+
+  <script>document.documentElement.dataset.tsVendorBase = "../vendor/";</script>
+  <script src="../vendor/tf-core.min.js"></script>
+  <script src="../vendor/tf-backend-webgl.min.js"></script>
+  <script src="../vendor/tf-converter.min.js"></script>
+  <script src="../vendor/body-pix.min.js"></script>
+  <script src="../src/core/config.js"></script>
+  <script src="../src/effects/dust.js"></script>
+  <script src="../src/core/segmenter.js"></script>
+  <script>
+    const TS = window.__THANOS_SNAP;
+    const out = document.getElementById("out"), octx = out.getContext("2d");
+    const maskC = document.getElementById("mask"), mctx = maskC.getContext("2d");
+    const statusEl = document.getElementById("status"), stateEl = document.getElementById("state");
+    const W = out.width, H = out.height;
+    const dust = new TS.DustEngine();
+    const seg = TS.Segmenter;
+    let state = "live";
+    const setState = s => { state = s; stateEl.textContent = "· " + s; };
+
+    const mk = (w,h)=>{const c=document.createElement("canvas");c.width=w;c.height=h;return c;};
+    const srcC = mk(W,H), sctx = srcC.getContext("2d");
+    const plate = mk(W,H), pctx = plate.getContext("2d");
+    const work = mk(W,H), wctx = work.getContext("2d");
+    let plateSeeded=false, plateReady=false, imgEl=null, videoEl=null;
+
+    const params = new URLSearchParams(location.search);
+    const imgUrl = params.get("img");
+    if (imgUrl){ imgEl = new Image(); imgEl.src = imgUrl; }
+
+    seg.init().then(ok=>{
+      statusEl.firstChild.textContent = ok ? "BodyPix ready — person-only mode  " : "model failed → full-frame mode  ";
+    });
+
+    function drawSource(){
+      if (videoEl && videoEl.videoWidth) sctx.drawImage(videoEl,0,0,W,H);
+      else if (imgEl && imgEl.complete && imgEl.naturalWidth) sctx.drawImage(imgEl,0,0,W,H);
+      else { sctx.fillStyle="#223"; sctx.fillRect(0,0,W,H); }
+    }
+    function accumulate(){
+      if(!seg.hasMask) return;
+      if(!plateSeeded){ pctx.filter="blur(12px) brightness(0.5)"; pctx.drawImage(srcC,0,0,W,H); pctx.filter="none"; plateSeeded=true; }
+      wctx.globalCompositeOperation="source-over"; wctx.clearRect(0,0,W,H); wctx.drawImage(srcC,0,0,W,H);
+      wctx.globalCompositeOperation="destination-out"; wctx.filter="blur(3px)"; wctx.drawImage(seg.maskCanvas,0,0,W,H); wctx.filter="none";
+      wctx.globalCompositeOperation="source-over"; pctx.drawImage(work,0,0,W,H); plateReady=true;
+    }
+    function freezePerson(){
+      const c=mk(W,H),cx=c.getContext("2d"); cx.drawImage(srcC,0,0,W,H);
+      cx.globalCompositeOperation="destination-in"; cx.filter="blur(2px)"; cx.drawImage(seg.maskCanvas,0,0,W,H); cx.filter="none"; return c;
+    }
+    function plateSnap(){ const c=mk(W,H); c.getContext("2d").drawImage(plate,0,0,W,H); return c; }
+    function goneComposite(){
+      octx.globalCompositeOperation="source-over"; octx.clearRect(0,0,W,H); octx.drawImage(srcC,0,0,W,H);
+      wctx.globalCompositeOperation="source-over"; wctx.clearRect(0,0,W,H); wctx.drawImage(plate,0,0,W,H);
+      wctx.globalCompositeOperation="destination-in"; wctx.filter="blur(3px)"; wctx.drawImage(seg.maskCanvas,0,0,W,H); wctx.filter="none";
+      wctx.globalCompositeOperation="source-over"; octx.drawImage(work,0,0,W,H);
+    }
+    const segReady = ()=> seg.available && seg.hasMask;
+
+    document.getElementById("snap").onclick=()=>{ if(state!=="live")return; setState("vanishing");
+      if(segReady()&&plateReady) dust.vanish(freezePerson(),W,H,plateSnap()); else dust.vanish(srcC,W,H,null); };
+    document.getElementById("return").onclick=()=>{ if(state!=="gone")return; setState("returning");
+      if(segReady()&&plateReady) dust.rematerialise(freezePerson(),W,H,plateSnap()); else dust.rematerialise(srcC,W,H,null); };
+    document.getElementById("cam").onclick=async()=>{ try{
+      const s=await navigator.mediaDevices.getUserMedia({video:true});
+      videoEl=document.createElement("video"); videoEl.srcObject=s; videoEl.muted=true; await videoEl.play();
+    }catch(e){ alert("Webcam unavailable: "+e.message);} };
+
+    function loop(){
+      requestAnimationFrame(loop);
+      const now=performance.now();
+      drawSource();
+      if(seg.available && (state==="live"||state==="gone")){ seg.update(srcC,W,H); accumulate(); }
+      // mask preview
+      if(seg.hasMask){ mctx.clearRect(0,0,maskC.width,maskC.height); mctx.fillStyle="#111"; mctx.fillRect(0,0,maskC.width,maskC.height);
+        mctx.drawImage(seg.maskCanvas,0,0,maskC.width,maskC.height); }
+      if(state==="live"){ octx.drawImage(srcC,0,0,W,H); }
+      else if(state==="vanishing"||state==="returning"){ const g=dust.render(octx,now); if(!g) setState(state==="vanishing"?"gone":"live"); }
+      else if(state==="gone"){ if(segReady()&&plateReady) goneComposite(); else dust.drawGhost(octx,W,H); }
+    }
+    loop();
+  </script>
+</body>
+</html>

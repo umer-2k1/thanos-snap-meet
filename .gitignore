@@ -2,3 +2,7 @@
 node_modules/
 *.log
 dist/
+
+# local test assets (not committed)
+demo/_sample.jpg
+demo/_test*

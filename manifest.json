@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Thanos Snap for Google Meet",
-  "version": "1.0.0",
-  "description": "Snap your fingers to disintegrate into dust like Thanos and auto-mute your mic. Snap again to return and unmute.",
+  "version": "1.1.0",
+  "description": "Snap your fingers to disintegrate into dust like Thanos and auto-mute your mic. Snap again to return and unmute. Only you dissolve — the room stays.",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -21,8 +21,18 @@
     {
       "matches": ["https://meet.google.com/*"],
       "run_at": "document_start",
+      "world": "ISOLATED",
+      "js": ["src/bridge.js"]
+    },
+    {
+      "matches": ["https://meet.google.com/*"],
+      "run_at": "document_start",
       "world": "MAIN",
       "js": [
+        "vendor/tf-core.min.js",
+        "vendor/tf-backend-webgl.min.js",
+        "vendor/tf-converter.min.js",
+        "vendor/body-pix.min.js",
         "src/core/config.js",
         "src/effects/dust.js",
         "src/core/segmenter.js",
@@ -35,7 +45,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["vendor/*"],
+      "resources": ["vendor/*", "vendor/model/*"],
       "matches": ["https://meet.google.com/*"]
     }
   ]

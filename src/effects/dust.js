@@ -40,13 +40,16 @@
     /**
      * Build the particle field from the current frame.
      * @param {HTMLCanvasElement|HTMLVideoElement} source frozen frame to sample
+     *        (when a mask is in play this is person-only, bg transparent)
      * @param {number} w output width
      * @param {number} h output height
+     * @param {HTMLCanvasElement|null} bg real background plate to reveal, or null
      */
-    _build(source, w, h) {
+    _build(source, w, h, bg) {
       const cfg = TS.dust;
       this.width = w;
       this.height = h;
+      this.bgCanvas = bg || null;
 
       // Downsample the source so each cell becomes one particle.
       const step = cfg.sampleStep;
@@ -93,35 +96,37 @@
         if (particles.length >= cap) break;
       }
       this.particles = particles;
-      TS.log("dust: built", particles.length, "particles");
+      TS.log("dust: built", particles.length, "particles", bg ? "(real bg)" : "(ghost bg)");
 
-      // Pre-render the dim "ghost room" backdrop that remains after the dust.
-      this.ghost.width = w;
-      this.ghost.height = h;
-      const g = this._ghostCtx;
-      g.clearRect(0, 0, w, h);
-      g.filter = "blur(14px) brightness(0.45) saturate(0.5)";
-      g.drawImage(source, 0, 0, w, h);
-      g.filter = "none";
-      // Subtle vignette so it clearly reads as "nobody's here".
-      const vg = g.createRadialGradient(w / 2, h / 2, h * 0.2, w / 2, h / 2, h * 0.75);
-      vg.addColorStop(0, "rgba(0,0,0,0)");
-      vg.addColorStop(1, "rgba(0,0,0,0.55)");
-      g.fillStyle = vg;
-      g.fillRect(0, 0, w, h);
+      if (!bg) {
+        // No segmentation: pre-render a dim "ghost room" from the whole frame.
+        this.ghost.width = w;
+        this.ghost.height = h;
+        const g = this._ghostCtx;
+        g.clearRect(0, 0, w, h);
+        g.filter = "blur(14px) brightness(0.45) saturate(0.5)";
+        g.drawImage(source, 0, 0, w, h);
+        g.filter = "none";
+        // Subtle vignette so it clearly reads as "nobody's here".
+        const vg = g.createRadialGradient(w / 2, h / 2, h * 0.2, w / 2, h / 2, h * 0.75);
+        vg.addColorStop(0, "rgba(0,0,0,0)");
+        vg.addColorStop(1, "rgba(0,0,0,0.55)");
+        g.fillStyle = vg;
+        g.fillRect(0, 0, w, h);
+      }
     }
 
-    /** Begin disintegrating. */
-    vanish(source, w, h) {
-      this._build(source, w, h);
+    /** Begin disintegrating. `bg` = real background plate, or null for ghost mode. */
+    vanish(source, w, h, bg) {
+      this._build(source, w, h, bg);
       this.mode = "vanish";
       this.startTime = performance.now();
       this.duration = TS.dust.vanishMs;
     }
 
     /** Begin re-materialising from the given (current) frame. */
-    rematerialise(source, w, h) {
-      this._build(source, w, h);
+    rematerialise(source, w, h, bg) {
+      this._build(source, w, h, bg);
       this.mode = "return";
       this.startTime = performance.now();
       this.duration = TS.dust.returnMs;
@@ -139,10 +144,17 @@
       // "return" is just time reversed.
       const prog = vanishing ? p : 1 - p;
 
-      // Base layer: the dim ghost room shows through more as dust clears.
+      // Base layer. With segmentation we reveal the REAL room (always fully
+      // there, since only the person is leaving). Without it we fade in a dim
+      // ghost of the whole frame as the dust clears.
       ctx.clearRect(0, 0, w, h);
-      ctx.globalAlpha = clamp(prog * 1.3, 0, 1);
-      ctx.drawImage(this.ghost, 0, 0, w, h);
+      if (this.bgCanvas) {
+        ctx.globalAlpha = 1;
+        ctx.drawImage(this.bgCanvas, 0, 0, w, h);
+      } else {
+        ctx.globalAlpha = clamp(prog * 1.3, 0, 1);
+        ctx.drawImage(this.ghost, 0, 0, w, h);
+      }
       ctx.globalAlpha = 1;
 
       const spread = 0.55; // how staggered the particle start times are
@@ -196,8 +208,9 @@
       return true;
     }
 
-    /** Draw just the dim ghost room (used while fully "gone"). */
+    /** Draw just the backdrop (used while fully "gone" in fallback mode). */
     drawGhost(ctx, w, h) {
+      if (this.bgCanvas) { ctx.drawImage(this.bgCanvas, 0, 0, w, h); return; }
       if (!this.ghost.width) return;
       ctx.drawImage(this.ghost, 0, 0, w, h);
     }

@@ -60,10 +60,28 @@
       const origStop = outTrack.stop.bind(outTrack);
       outTrack.stop = () => { origStop(); try { rawTrack.stop(); } catch (_) {} };
 
-      this.video = { rawTrack, videoEl, canvas, ctx, stream, raf: 0, w, h };
+      const bgPlate = this._mkCanvas(w, h);
+      const work = this._mkCanvas(w, h);
+      this.video = {
+        rawTrack, videoEl, canvas, ctx, stream, raf: 0, w, h,
+        bgPlate, plateCtx: bgPlate.getContext("2d"),
+        work, workCtx: work.getContext("2d"),
+        plateSeeded: false, plateReady: false
+      };
       this._renderLoop();
       TS.log("video pipeline ready", w + "x" + h);
       return outTrack;
+    },
+
+    _mkCanvas(w, h) {
+      const c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      return c;
+    },
+
+    _segActive() {
+      const s = TS.Segmenter;
+      return !!(s && s.available && s.hasMask);
     },
 
     _renderLoop() {
@@ -73,31 +91,103 @@
         v.raf = requestAnimationFrame(draw);
         const now = performance.now();
         const st = TS.state;
+        const seg = TS.Segmenter;
+
+        // Keep the mask + empty-room plate fresh whenever you're present.
+        if (seg && seg.available && (st === "live" || st === "gone")) {
+          seg.update(v.videoEl, v.w, v.h);
+          if (seg.hasMask) this._accumulatePlate();
+        }
 
         if (st === "live") {
-          // Straight passthrough of the real camera.
           try { v.ctx.drawImage(v.videoEl, 0, 0, v.w, v.h); } catch (_) {}
         } else if (st === "vanishing" || st === "returning") {
           const stillAnimating = this.dust.render(v.ctx, now);
           if (!stillAnimating) {
-            if (st === "vanishing") TS.state = "gone";
-            else { TS.state = "live"; }
+            TS.state = st === "vanishing" ? "gone" : "live";
             this.busy = false;
             TS.onStateChange && TS.onStateChange(TS.state);
           }
         } else if (st === "gone") {
-          // Hold the dim, empty "ghost room".
-          this.dust.drawGhost(v.ctx, v.w, v.h);
+          if (this._segActive() && v.plateReady) this._drawGoneComposite();
+          else this.dust.drawGhost(v.ctx, v.w, v.h);
         }
       };
       draw();
     },
 
+    // Fold the current background (everything that isn't you) into the plate,
+    // so over time we hold a clean, person-free image of the room.
+    _accumulatePlate() {
+      const v = this.video, seg = TS.Segmenter;
+      if (!v.plateSeeded) {
+        // Seed with a dim, blurred frame so holes are never pure black even
+        // before the plate has filled in with real background.
+        v.plateCtx.filter = "blur(12px) brightness(0.5)";
+        v.plateCtx.drawImage(v.videoEl, 0, 0, v.w, v.h);
+        v.plateCtx.filter = "none";
+        v.plateSeeded = true;
+      }
+      const wc = v.workCtx;
+      wc.globalCompositeOperation = "source-over";
+      wc.clearRect(0, 0, v.w, v.h);
+      wc.drawImage(v.videoEl, 0, 0, v.w, v.h);
+      // Erase you from the copy, leaving only background pixels.
+      wc.globalCompositeOperation = "destination-out";
+      wc.filter = "blur(3px)";
+      wc.drawImage(seg.maskCanvas, 0, 0, v.w, v.h);
+      wc.filter = "none";
+      wc.globalCompositeOperation = "source-over";
+      // Paint those fresh background pixels onto the plate.
+      v.plateCtx.drawImage(v.work, 0, 0, v.w, v.h);
+      v.plateReady = true;
+    },
+
+    // While "gone": show the live room but keep yourself painted out using the
+    // accumulated empty-room plate, so any real background motion still shows.
+    _drawGoneComposite() {
+      const v = this.video, seg = TS.Segmenter;
+      v.ctx.globalCompositeOperation = "source-over";
+      v.ctx.clearRect(0, 0, v.w, v.h);
+      v.ctx.drawImage(v.videoEl, 0, 0, v.w, v.h);
+      // plate ∩ you  ->  cover the live you with empty room.
+      const wc = v.workCtx;
+      wc.globalCompositeOperation = "source-over";
+      wc.clearRect(0, 0, v.w, v.h);
+      wc.drawImage(v.bgPlate, 0, 0, v.w, v.h);
+      wc.globalCompositeOperation = "destination-in";
+      wc.filter = "blur(3px)";
+      wc.drawImage(seg.maskCanvas, 0, 0, v.w, v.h);
+      wc.filter = "none";
+      wc.globalCompositeOperation = "source-over";
+      v.ctx.drawImage(v.work, 0, 0, v.w, v.h);
+    },
+
     _freezeFrame() {
       const v = this.video;
-      const c = document.createElement("canvas");
-      c.width = v.w; c.height = v.h;
+      const c = this._mkCanvas(v.w, v.h);
       c.getContext("2d").drawImage(v.videoEl, 0, 0, v.w, v.h);
+      return c;
+    },
+
+    // A person-only copy of the current frame (background made transparent).
+    _freezePerson() {
+      const v = this.video, seg = TS.Segmenter;
+      const c = this._mkCanvas(v.w, v.h);
+      const cx = c.getContext("2d");
+      cx.drawImage(v.videoEl, 0, 0, v.w, v.h);
+      cx.globalCompositeOperation = "destination-in";
+      cx.filter = "blur(2px)";
+      cx.drawImage(seg.maskCanvas, 0, 0, v.w, v.h);
+      cx.filter = "none";
+      return c;
+    },
+
+    // A stable copy of the plate so the revealed room doesn't shift mid-animation.
+    _plateSnapshot() {
+      const v = this.video;
+      const c = this._mkCanvas(v.w, v.h);
+      c.getContext("2d").drawImage(v.bgPlate, 0, 0, v.w, v.h);
       return c;
     },
 
@@ -158,17 +248,27 @@
       this.busy = true;
       TS.state = "vanishing";
       this.setMeetAudioMuted(true); // mute INSTANTLY at the snap
-      const frame = this._freezeFrame();
-      this.dust.vanish(frame, this.video.w, this.video.h);
+      const v = this.video;
+      if (this._segActive() && v.plateReady) {
+        // Person-only: only you dissolve; the real room is revealed.
+        this.dust.vanish(this._freezePerson(), v.w, v.h, this._plateSnapshot());
+      } else {
+        // Fallback: the whole frame dissolves to a dim ghost of the room.
+        this.dust.vanish(this._freezeFrame(), v.w, v.h, null);
+      }
       TS.onStateChange && TS.onStateChange("vanishing");
-      TS.log("vanishing + muted");
+      TS.log("vanishing + muted", this._segActive() ? "(person-only)" : "(full-frame)");
     },
 
     rematerialise() {
       this.busy = true;
       TS.state = "returning";
-      const frame = this._freezeFrame();
-      this.dust.rematerialise(frame, this.video.w, this.video.h);
+      const v = this.video;
+      if (this._segActive() && v.plateReady) {
+        this.dust.rematerialise(this._freezePerson(), v.w, v.h, this._plateSnapshot());
+      } else {
+        this.dust.rematerialise(this._freezeFrame(), v.w, v.h, null);
+      }
       this.setMeetAudioMuted(false); // unmute as you reappear
       TS.onStateChange && TS.onStateChange("returning");
       TS.log("returning + unmuted");
